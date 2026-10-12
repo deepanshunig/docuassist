@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from backend.schemas import Document, Page
+from backend.schemas import ChunkRecord, Document, Page
 
 
 class Storage:
@@ -51,6 +51,31 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS pending_cleanup (
                     document_id TEXT PRIMARY KEY
                 );
+                CREATE TABLE IF NOT EXISTS chunks (
+                    id TEXT PRIMARY KEY,
+                    document_id TEXT NOT NULL,
+                    pdf_page INTEGER NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    token_count INTEGER NOT NULL,
+                    vector BLOB NOT NULL,
+                    dimension INTEGER NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    FOREIGN KEY (document_id, pdf_page) REFERENCES pages(document_id, pdf_page)
+                        ON DELETE CASCADE,
+                    UNIQUE (document_id, pdf_page, ordinal)
+                );
+                CREATE TABLE IF NOT EXISTS document_index (
+                    document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+                    fingerprint TEXT NOT NULL,
+                    source_digest TEXT NOT NULL,
+                    chunk_count INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS collection_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    version INTEGER NOT NULL
+                );
+                INSERT OR IGNORE INTO collection_state VALUES (1, 0);
             """)
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(pages)")}
             if "extraction_method" not in columns:
@@ -61,8 +86,8 @@ class Storage:
                     "UPDATE pages SET extraction_method = CASE "
                     "WHEN length(trim(text)) > 0 THEN 'text' ELSE 'none' END"
                 )
-            if connection.execute("PRAGMA user_version").fetchone()[0] < 2:
-                connection.execute("PRAGMA user_version = 2")
+            if connection.execute("PRAGMA user_version").fetchone()[0] < 3:
+                connection.execute("PRAGMA user_version = 3")
 
     @staticmethod
     def document_from_row(row: sqlite3.Row) -> Document:
@@ -99,7 +124,7 @@ class Storage:
             ).fetchall()
         return [Page.model_validate(dict(row)) for row in rows]
 
-    def save_document(self, document: Document, pages: list[Page]) -> None:
+    def save_document(self, document: Document, pages: list[Page], chunks=None, source_hash=None) -> None:
         values = document.model_dump()
         values["warnings"] = json.dumps(document.warnings)
         with self.connection() as connection:
@@ -115,6 +140,8 @@ class Storage:
                   page.extraction_method)
                  for page in pages],
             )
+            self.write_chunks(connection, document.id, chunks, source_hash)
+            connection.execute("UPDATE collection_state SET version = version + 1 WHERE id = 1")
 
     def delete_document(self, document_id: str) -> None:
         with self.connection() as connection:
@@ -122,8 +149,9 @@ class Storage:
                 "INSERT OR IGNORE INTO pending_cleanup VALUES (?)", (document_id,)
             )
             connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+            connection.execute("UPDATE collection_state SET version = version + 1 WHERE id = 1")
 
-    def replace_extraction(self, document: Document, pages: list[Page]) -> None:
+    def replace_extraction(self, document: Document, pages: list[Page], chunks=None, source_hash=None) -> None:
         """Commit refreshed metadata and all pages together; failures retain old results."""
         values = document.model_dump()
         values["warnings"] = json.dumps(document.warnings)
@@ -133,12 +161,50 @@ class Storage:
                 "status = :status, warnings = :warnings WHERE id = :id", values,
             )
             connection.execute("DELETE FROM pages WHERE document_id = ?", (document.id,))
+            connection.execute("DELETE FROM document_index WHERE document_id = ?", (document.id,))
             connection.executemany(
                 "INSERT INTO pages (document_id, pdf_page, text, character_count, warning, "
                 "extraction_method) VALUES (?, ?, ?, ?, ?, ?)",
                 [(document.id, page.pdf_page, page.text, page.character_count, page.warning,
                   page.extraction_method) for page in pages],
             )
+            self.write_chunks(connection, document.id, chunks, source_hash)
+            connection.execute("UPDATE collection_state SET version = version + 1 WHERE id = 1")
+
+    @staticmethod
+    def write_chunks(connection, document_id, chunks, source_hash):
+        if chunks is None:
+            return
+        connection.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
+        connection.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+            (c.id, c.document_id, c.pdf_page, c.ordinal, c.text, c.token_count,
+             c.vector, c.dimension, c.fingerprint) for c in chunks])
+        connection.execute("INSERT OR REPLACE INTO document_index VALUES (?, ?, ?, ?)",
+            (document_id, chunks[0].fingerprint if chunks else "", source_hash, len(chunks)))
+
+    def save_index(self, document_id, chunks, source_hash):
+        self.save_indexes([(document_id, chunks, source_hash)])
+
+    def save_indexes(self, indexes):
+        with self.connection() as connection:
+            for document_id, chunks, source_hash in indexes:
+                self.write_chunks(connection, document_id, chunks, source_hash)
+            connection.execute("UPDATE collection_state SET version = version + 1 WHERE id = 1")
+
+    def list_chunks(self) -> list[ChunkRecord]:
+        with self.connection() as connection:
+            rows = connection.execute("SELECT c.*, d.filename, p.extraction_method FROM chunks c "
+                "JOIN documents d ON d.id = c.document_id JOIN pages p "
+                "ON p.document_id = c.document_id AND p.pdf_page = c.pdf_page ORDER BY c.id").fetchall()
+        return [ChunkRecord(**dict(row)) for row in rows]
+
+    def index_metadata(self):
+        with self.connection() as connection:
+            return {row["document_id"]: dict(row) for row in connection.execute("SELECT * FROM document_index")}
+
+    def collection_version(self):
+        with self.connection() as connection:
+            return connection.execute("SELECT version FROM collection_state WHERE id = 1").fetchone()[0]
 
     def pending_cleanup(self) -> list[str]:
         with self.connection() as connection:

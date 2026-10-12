@@ -1,49 +1,53 @@
-**DocuAssist build progress**
+# DocuAssist build progress
 
-Milestone 1 is verified: requirements, the Python environment, five fictional sample manuals,
-development/final evaluation records, SQLite storage, PDF upload/extraction, and a working
-document inspection interface, now with local OCR for image-only pages. All 34 ingestion/OCR checks pass. The 30 evaluation questions have
-valid source pages and isolated question groups. All 10 sample PDF pages were rendered and
-visually inspected. A browser upload of the VPN guide displayed its two extracted pages correctly.
+The local RAG pipeline is implemented and verified on Windows with Python 3.12 and a 16 GB RAM laptop. Version 0.3.0 supports PDF ingestion/OCR, page-aware token chunking, persistent MiniLM embeddings, FAISS retrieval, real local-model generation, citations, and source inspection.
 
-The interface runs at http://127.0.0.1:8511 and the backend at http://127.0.0.1:8011.
-The verified interface screenshot is saved as milestone-1.jpg beside this document.
+**Verified behavior**
 
-OCR uses PDFium rendering and RapidOCR with packaged ONNX models on CPU. The real two-page
-image-only VPN fixture recovers the client and MFA prerequisites on PDF page 2. The test suite
-also covers OCR bypass for text PDFs, blank scans, mixed page numbering, missing/broken OCR,
-page limits, bounded raster sizes, OCR persistence/deletion, and version 1 database migration.
-Defaults are 180 DPI, 4 million pixels per rendered page, and at most 10 pages needing OCR
-per PDF. Upright printed English scans are the verified scope; OCR text still needs review.
-The line-angle classifier is disabled after it incorrectly flipped one upright fixture line.
-The running backend is version 0.2.1. A browser upload of the scanned fixture displayed two
-OCR pages, including the client/MFA prerequisites on page 2; the preview is ocr-preview.jpg.
-The existing collection remained intact after migration. Previously extracted documents keep
-their stored results until Re-extract with OCR is selected. This processes the stored PDF,
-preserves its identity and original, and commits refreshed pages/counts atomically. Tests verify
-real OCR on older mixed PDFs and preservation of prior results after failed re-extraction.
-A browser retry of an older mixed PDF replaced its legacy missing-text warning with an OCR
-page label and recovered page text. Both pages were readable afterward, with the original
-PDF hash and collection count unchanged. Personal-document previews remain in ignored cache.
+- All 62 automated checks pass, including the original 34 ingestion/OCR checks and new retrieval/citation/lifecycle checks. Controlled model outputs test plumbing; a real MiniLM integration check verifies normalized 384-dimensional vectors and relevant ranking.
+- A real text-PDF question produced an answer using the VPN prerequisites on PDF page 2. A separate real scanned-PDF run completed OCR -> embeddings -> retrieval -> Qwen generation, with the citation labelled OCR and PDF page 2.
+- Streamlit AppTest submitted a real question through the running HTTP backend, displayed source pages, and cleared its old answer after a collection mutation, with no Streamlit exceptions. This is an app-harness check, not a browser screenshot test.
+- Existing extracted documents were indexed at startup without changing their original identities or PDFs. A private database backup was saved before migration.
+- Duplicate uploads reuse vectors. Restart reuses matching persisted vectors and rebuilds FAISS. Deletion removes vectors and never returns the deleted passages after restart.
+- Re-extraction refreshes page text and vectors atomically. Vector/database failures preserve previous pages and search state. Concurrent answering/deletion uses one collection lock.
+- Unknown citation IDs, including IDs hidden in grouped markers, are rejected. Missing inline markers are rendered from valid structured references. Refusals/clarification omit answer-support citations. Provider timeouts remain provider errors.
 
-The verified environment uses Python 3.12.14. Create an isolated virtual environment and
-install the pinned dependency files to run the project on another machine.
+The local app runs at http://127.0.0.1:8511, the API at http://127.0.0.1:8011, and the default model server at http://127.0.0.1:8012. The default generator is Qwen2.5-1.5B-Instruct Q4_K_M with llama.cpp b11574 on CPU. MiniLM uses a pinned revision and ONNX Runtime. OCR uses PDFium/RapidOCR with packaged CPU models.
 
-| Architecture step | Implementation status |
+**Measured synthetic evaluation**
+
+The current development run has 20 questions, 14 answerable. A fresh holdout_v2 run has 10 questions, 7 answerable. Both used the five fictional manuals, independent questions, 200-token chunks, 30-token overlap, top five retrieval, and a development-tuned 0.20 evidence gate. Both reports record the same system-prompt SHA-256. The fresh holdout was authored after the final prompt change and was not used to tune the released implementation; its question groups are disjoint from the original development/final groups.
+
+| Measure | Current development | Fresh holdout_v2 |
+|---|---|---|
+| Supporting page hit@5, vector retrieval | 14/14 | 7/7 |
+| Supporting page hit@5, TF-IDF baseline | 14/14 | 7/7 |
+| All expected supporting pages present@5 | 14/14 | 7/7 |
+| Expected answer-status agreement | 20/20 | 9/10 |
+| HTTP/provider errors | 0 | 0 |
+| Median end-to-end latency | 11.03 s | 10.42 s |
+| p95 end-to-end latency | 21.07 s | 14.84 s |
+
+These are source-presence and status measures, not factual answer accuracy. The corpus has only ten pages, so retrieving five pages is a generous setting. TF-IDF also found all expected pages; this run does not show that semantic retrieval outperforms the baseline. Wall-clock timings came from local development runs, with some shared model/CPU activity; they are not isolated performance benchmarks.
+
+Manual review found useful core answers and real source mappings, but also material model-quality limitations. The current development instruction-weekend response begins with No but wrongly treats the quoted instruction as a priority policy. Several responses cite unnecessary passages, exceed the requested length, or omit expected detail. In holdout_v2, the vague unspecified-problem question receives insufficient_evidence instead of a clarification question; the seven answerable responses contain their expected core facts. Valid citation IDs do not establish that every generated claim is supported.
+
+Actual questions, expected answers, generated text, passages, and stage timings for the released prompt are recorded in evaluation/results/dev.json and evaluation/results/holdout_v2.json. Evaluation collections contain only fictional manuals and are isolated from the user's runtime uploads. Model-quality improvements should use development data; using holdout examples to tune future changes requires another fresh held-out set.
+
+The earlier evaluation/results/final.json is retained as a historical run of a retired prompt. A development response copied a factual example from that prompt into an unrelated missing-information answer. All factual examples were removed before the current runs. The current replacement question correctly returns insufficient_evidence. The historical final report does not measure the released prompt and must not be combined with its current results.
+
+**Architecture status**
+
+| Step | Status |
 |---|---|
-| 1. Requirements | Written with acceptance scenarios |
-| 2. Environment | Project virtual environment and launcher scripts created |
-| 3. Demo/evaluation data | Five manuals and 20 development / 10 final questions prepared |
-| 4. Storage/contracts | Documents, pages, cleanup queue, API schemas implemented; chunk/vector storage follows in steps 6–7 |
-| 5. Ingestion | Upload validation, direct extraction, automatic local OCR, page provenance, warnings and exact-duplicate handling implemented |
-| 6–9. Chunking/search | Next milestone |
-| 10. Deletion/recovery | Initial document deletion and recovery implemented; search lifecycle follows with indexing |
-| 11–12. Generation | Planned |
-| 13. API | Document endpoints implemented; search/ask follow later |
-| 14. Interface | Upload, inspection and deletion implemented; answering interface follows later |
-| 15. Evaluation/checks | 34 ingestion/OCR checks and evaluation records prepared; retrieval/answer metrics follow later |
-| 16. Packaging | Planned |
+| 1-3: requirements, environment, samples | Implemented |
+| 4-5: storage and ingestion/OCR | Implemented; schema version 3 |
+| 6-7: token chunks and embeddings | Implemented with limits, fingerprints and persisted vectors |
+| 8-9: FAISS and retrieval/baseline | Implemented |
+| 10: deletion/recovery | Implemented for originals, pages and search state |
+| 11-12: generation/answering | Real llama.cpp/Qwen path verified; optional Ollama adapter implemented but not real-model evaluated |
+| 13-14: API/interface | Search/ask endpoints, question form and source display implemented |
+| 15: checks/evaluation | Automated lifecycle checks and real-model reports implemented; model-quality limitations recorded |
+| 16: packaging/demo | Local setup/launch scripts and demo guide implemented; Docker/production deployment remains an extension |
 
-The next implementation target is tokenizer-aware chunking using the actual embedding model's
-tokenizer, then persistent embeddings and FAISS search. Current document statuses deliberately
-say extracted rather than indexed. There is no generated-answer feature or measured AI accuracy yet.
+This release is single-owner and local. Conversation memory, multi-user authentication/collection isolation, richer layout/table handling, and larger-scale deployment are not implemented. Printed upright English OCR is the verified scan scope. Preserve source review in the workflow when using the small local generator.

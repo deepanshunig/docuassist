@@ -1,6 +1,6 @@
 **DocuAssist requirements**
 
-An employee uploads fictional IT manuals and asks questions about their contents. The completed project will answer from retrieved evidence and display document names, PDF page numbers, and supporting passages. It demonstrates ingestion, retrieval, grounded generation, evaluation, and deployment for an AI/ML portfolio.
+An employee uploads fictional IT manuals and asks questions about their contents. The implemented local RAG pipeline retrieves evidence and generates answers with document names, PDF page numbers, and supporting passages. It demonstrates ingestion/OCR, semantic retrieval, local-model generation, persistence, and evaluation for an AI/ML portfolio. Citation IDs are structurally validated; factual support still requires review.
 
 Release scope: one local owner, one collection, English text PDFs and clean upright printed scans, independent questions, 10 documents, 10 MiB per file, and 50 PDF pages per document. Automatic local OCR supports up to 10 pages without embedded text per upload. Rendered pages are bounded to 4 million pixels by default.
 
@@ -19,4 +19,4 @@ Release scope: one local owner, one collection, English text PDFs and clean upri
 11. Restart with a version 1 database. Migrate the page extraction-method field while retaining existing page text and original files.
 12. Select an older uploaded PDF and re-extract with OCR. Process the stored original without deletion or another upload; retain document identity and commit new page records/counts together. Keep earlier records if extraction or database writing fails, or a previously readable page loses its text.
 
-Milestone 1 implements upload, validation, direct extraction, OCR fallback, inspection, persistence, duplicate detection, and deletion. Semantic search and generated answers are later milestones. Document statuses say extracted, not indexed, until embeddings and search are implemented.
+The current release implements upload/validation, extraction/OCR, page-aware token chunks, persistent MiniLM embeddings, FAISS search, a real llama.cpp/Qwen generator, citations, source inspection, and deletion/restart recovery. Document statuses describe extraction. Upload indexed and health indexed_document_count describe semantic-search readiness separately. Model availability is explicit, and extraction remains usable when embeddings are not installed.

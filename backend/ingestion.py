@@ -123,6 +123,7 @@ class DocumentService:
         self.storage = storage
         self.lock = RLock()
         self.ocr = LocalOCR(settings)
+        self.indexer = None
 
     def initialize(self) -> None:
         self.storage.initialize()
@@ -161,7 +162,8 @@ class DocumentService:
         with self.lock:
             existing = self.storage.find_by_hash(digest)
             if existing:
-                return UploadResult(document=existing, duplicate=True)
+                return UploadResult(document=existing, duplicate=True,
+                    indexed=bool(self.indexer and self.indexer.is_indexed(existing.id)))
             if len(self.storage.list_documents()) >= self.settings.max_documents:
                 raise DocumentError(
                     "collection_full",
@@ -177,14 +179,22 @@ class DocumentService:
                 warnings=warnings, created_at=datetime.now(timezone.utc).isoformat(),
             )
             original = self.file_path(document.id)
+            plan = self.indexer.prepare(document, pages) if self.indexer else None
             try:
                 with original.open("xb") as target:
                     target.write(content)
-                self.storage.save_document(document, pages)
+                if plan:
+                    self.storage.save_document(document, pages, plan.chunks, plan.digest)
+                else:
+                    self.storage.save_document(document, pages)
             except Exception:
                 original.unlink(missing_ok=True)
                 raise
-            return UploadResult(document=document)
+            if plan:
+                self.indexer.activate(plan.snapshot)
+            return UploadResult(document=document, indexed=bool(plan),
+                indexing_warning=None if plan else "PDF extracted. Semantic indexing is not ready; "
+                    "set up the embedding model and restart the backend.")
 
     def pages(self, document_id: str) -> DocumentPages:
         with self.lock:
@@ -232,7 +242,12 @@ class DocumentService:
                 "status": "extracted_with_warnings" if warnings else "extracted",
                 "warnings": warnings,
             })
-            self.storage.replace_extraction(refreshed, pages)
+            plan = self.indexer.prepare(refreshed, pages) if self.indexer else None
+            if plan:
+                self.storage.replace_extraction(refreshed, pages, plan.chunks, plan.digest)
+                self.indexer.activate(plan.snapshot)
+            else:
+                self.storage.replace_extraction(refreshed, pages)
             return DocumentPages(document=refreshed, pages=pages)
 
     def delete(self, document_id: str) -> DeleteResult:
@@ -243,6 +258,7 @@ class DocumentService:
             original = self.file_path(document.id)
             tombstone = self.file_path(document.id, deleting=True)
             renamed = False
+            snapshot = self.indexer.prepare_delete(document.id) if self.indexer else None
             try:
                 if original.exists():
                     original.replace(tombstone)
@@ -252,6 +268,8 @@ class DocumentService:
                 if renamed:
                     tombstone.replace(original)
                 raise
+            if self.indexer:
+                self.indexer.activate(snapshot)
             pending = self.retry_cleanup()
             warnings = (["Document records were removed; original-file cleanup will retry "
                          "on backend restart."] if document.id in pending else [])

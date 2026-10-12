@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     seen_ids = set()
     group_splits = {}
-    for split, expected_count in (("dev", 20), ("final", 10)):
+    for split, expected_count in (("dev", 20), ("final", 10), ("holdout_v2", 10)):
         records = [json.loads(line) for line in
                    (ROOT / "evaluation" / f"{split}.jsonl").read_text(encoding="utf-8").splitlines()]
         assert len(records) == expected_count

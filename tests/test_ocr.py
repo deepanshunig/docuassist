@@ -229,7 +229,7 @@ def test_version_one_database_migrates_without_losing_pages_or_originals(setting
             assert upload(client, TEXT_SAMPLE.read_bytes()).json()["duplicate"]
             assert original.read_bytes() == TEXT_SAMPLE.read_bytes()
     with sqlite3.connect(settings.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
     with TestClient(create_app(settings)) as client:
         other = TEXT_SAMPLE.parent / "fictional-password-guide.pdf"
         assert upload(client, other.read_bytes()).status_code == 201

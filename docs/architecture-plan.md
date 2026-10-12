@@ -1,8 +1,8 @@
 **DocuAssist: full architecture and build checklist**
 
-Build a local document question-answering assistant for an AI/ML portfolio. A user uploads IT support PDFs, asks a question, and receives an answer supported by document passages and PDF page citations. This plan specifies the implementation order, module responsibilities, data contracts, and checks needed to finish the project. The first ingestion milestone is implemented; see progress.md for verified behavior and remaining work.
+Build a local document question-answering assistant for an AI/ML portfolio. A user uploads IT support PDFs, asks a question, and receives an answer supported by document passages and PDF page citations. The local RAG workflow is now implemented: ingestion/OCR, token chunking, persistent embeddings, FAISS retrieval, real local-model generation, API, source inspection, and evaluation. This document retains the original build checklist as design guidance; progress.md records verified behavior and remaining work.
 
-The first release has one owner and one shared local document collection. Start with English text PDFs and independent questions. Embeddings run locally. Generation uses a configurable language-model adapter, with local Ollama as the first option after checking the laptop. A hosted provider can implement the same adapter if needed. Record the actual provider and model before evaluating answers.
+The first release has one owner and one shared local document collection. It supports English text/scanned PDFs and independent questions. MiniLM embeddings run with ONNX Runtime. After checking the laptop's 16 GB RAM and integrated graphics, the verified generator uses Qwen2.5-1.5B-Instruct Q4_K_M with the portable llama.cpp CPU server. An optional Ollama adapter shares the generator interface. Model revisions, chunk parameters, actual generator, and timings are recorded during evaluation.
 
 **Target architecture**
 
@@ -30,16 +30,16 @@ There are two workflows. Uploading produces searchable evidence: PDF -> pages ->
 
 | Component | Choice | Responsibility |
 |---|---|---|
-| Development runtime | Python 3.11 | A proposed starting version; verify dependencies on the target machine |
+| Development runtime | Python 3.12 | Verified; dependency files support 3.11/3.12 |
 | Interface | Streamlit | Upload, document list, question input, answers, source passages |
 | Backend | FastAPI, Uvicorn | HTTP endpoints, validation, orchestration |
 | PDF parser | pypdf | Extract text page by page |
-| Embedding model | sentence-transformers/all-MiniLM-L6-v2 | Convert passages and questions to vectors |
+| Embedding model | sentence-transformers/all-MiniLM-L6-v2 via ONNX Runtime | Convert passages and questions to normalized 384-dimensional vectors |
 | Vector search | FAISS IndexFlatIP | Exact nearest-neighbor search for the small collection |
 | Canonical storage | SQLite | Persist document records, page text, chunks, vectors |
 | Original files | Local data directory | Store PDFs under generated document IDs |
-| Generator | Configurable adapter, initially Ollama if suitable | Produce answers from retrieved evidence |
-| Packaging | Docker Compose | Run frontend and backend with persistent backend data |
+| Generator | Local llama.cpp/Qwen; optional Ollama adapter | Produce structured answers from retrieved evidence |
+| Packaging | Local launch/setup scripts; Docker Compose remains an extension | Run with persistent backend data |
 | Verification | pytest and a fixed evaluation dataset | Check behavior and measure retrieval/answer quality |
 
 Use the project Git repository. All proposed paths in the tree below are relative to its root:
@@ -252,7 +252,7 @@ Create modules when their implementation step is reached, rather than filling th
    - [ ] Bound timeout, retries, and output size. Return an explicit provider error when generation fails; do not reinterpret a timeout as absent document evidence.
    - [ ] Keep model/provider configuration in settings so storage and search do not depend on one generator vendor.
 
-   Deliverable: an adapter using a real generator. Completion check: a short answer can be generated from a supplied passage, with the actual model recorded. Ollama exposes a chat API for this integration. [Ollama documentation](https://docs.ollama.com/api/chat).
+   Implemented: a real local llama.cpp generator with native JSON-schema-constrained completion, chat-template/tokenizer budgeting, bounded output and timeouts, and model readiness. Optional Ollama support uses its structured chat API and a conservative byte budget. [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md), [Ollama documentation](https://docs.ollama.com/api/chat).
 
 12. **Connect retrieval to grounded answering.**
 
@@ -354,4 +354,4 @@ Create modules when their implementation step is reached, rather than filling th
 | Questions receive supported answers | 11–13 | Real-model answers and sources work through the API |
 | Portfolio is usable and reviewable | 14–16 | UI, measured evaluation, packaging, and interview demo |
 
-Start with Step 1 and finish its acceptance examples before Step 2. The first coding target is Steps 2–5: one PDF becomes correctly numbered page records. A local demonstration with evaluation is a better first delivery target than committing to a deployment date before the laptop and dependency checks.
+The local document-to-answer workflow is implemented. Refer to progress.md and the measured evaluation reports rather than treating unchecked items in this original design checklist as current feature status. Container packaging, production authentication, multi-user collection isolation, stronger model evaluation, and richer document/layout handling remain extensions.
